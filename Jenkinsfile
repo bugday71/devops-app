@@ -2,7 +2,7 @@ pipeline {
   agent any
 
   environment {
-    PROJECT_ID = 'your-gcp-project-id'
+    PROJECT_ID = 'k8s-test-486501'
     REGION = 'asia-northeast3'
     REPOSITORY = 'devops-repo'
     IMAGE_NAME = 'nginx-sample'
