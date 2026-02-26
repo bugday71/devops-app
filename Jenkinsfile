@@ -1,61 +1,57 @@
 pipeline {
-  agent any
-
-  environment {
-    PROJECT_ID = 'k8s-test-486501'
-    REGION = 'asia-northeast3'
-    REPOSITORY = 'devops-repo'
-    IMAGE_NAME = 'nginx-sample'
-
-    // e.g. asia-northeast3-docker.pkg.dev
-    REGISTRY_HOST = "${REGION}-docker.pkg.dev"
-    IMAGE_URI = "${REGISTRY_HOST}/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
+  agent {
+    kubernetes {
+      yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    command:
+      - cat
+    tty: true
+"""
+    }
   }
 
-  options {
-    timestamps()
+  environment {
+    PROJECT_ID = "k8s-test-486501"
+    REGION     = "asia-northeast3"
+    REPO       = "devops-repo"
+    IMAGE      = "nginx-sample"
+    TAG        = "${BUILD_NUMBER}"
   }
 
   stages {
-    stage('Checkout') {
+    stage('Build & Push') {
       steps {
-        checkout scm
-      }
-    }
-
-    stage('Build Image') {
-      steps {
-        script {
-          sh 'docker build -t ${IMAGE_URI}:${BUILD_NUMBER} -t ${IMAGE_URI}:latest .'
-        }
-      }
-    }
-
-    stage('Auth to GCP') {
-      steps {
-        withCredentials([file(credentialsId: 'gcp-sa-key-json', variable: 'GCP_SA_KEY')]) {
+        container('kaniko') {
           sh '''
-            gcloud auth activate-service-account --key-file="$GCP_SA_KEY"
-            gcloud config set project "$PROJECT_ID"
-            gcloud auth configure-docker "$REGISTRY_HOST" --quiet
+          TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+            http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+            | sed -n 's/.*"access_token":"\\([^"]*\\)".*/\\1/p')
+
+          mkdir -p /kaniko/.docker
+          cat > /kaniko/.docker/config.json <<EOF
+{
+  "auths": {
+    "${REGION}-docker.pkg.dev": {
+      "username": "oauth2accesstoken",
+      "password": "${TOKEN}"
+    }
+  }
+}
+EOF
+
+          /kaniko/executor \
+            --context `pwd` \
+            --dockerfile Dockerfile \
+            --destination ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}/${IMAGE}:${TAG}
           '''
         }
       }
-    }
-
-    stage('Push Image') {
-      steps {
-        sh '''
-          docker push ${IMAGE_URI}:${BUILD_NUMBER}
-          docker push ${IMAGE_URI}:latest
-        '''
-      }
-    }
-  }
-
-  post {
-    success {
-      echo "Pushed: ${IMAGE_URI}:${BUILD_NUMBER} and ${IMAGE_URI}:latest"
     }
   }
 }
